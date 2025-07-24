@@ -1,43 +1,59 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 
-
-interface Position {
+interface CarPosition {
   x: number;
   y: number;
+  angle: number;
+  speed: number;
+  velocity: { x: number; y: number };
 }
 
-interface Enemy {
-  id: number;
-  x: number;
-  y: number;
-  dx: number;
-  dy: number;
+interface RaceTrack {
+  segments: { x1: number; y1: number; x2: number; y2: number }[];
 }
 
 const Index = () => {
-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'settings' | 'gameover'>('menu');
-  const [playerPos, setPlayerPos] = useState<Position>({ x: 50, y: 80 });
-  const [enemies, setEnemies] = useState<Enemy[]>([]);
-  const [score, setScore] = useState(0);
-  const [gameSpeed, setGameSpeed] = useState(1);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [gameState, setGameState] = useState<'menu' | 'racing' | 'paused'>('menu');
+  const [car, setCar] = useState<CarPosition>({
+    x: 400,
+    y: 500,
+    angle: 0,
+    speed: 0,
+    velocity: { x: 0, y: 0 }
+  });
   const [keys, setKeys] = useState<Set<string>>(new Set());
-  const [explosion, setExplosion] = useState<Position | null>(null);
+  const [lapTime, setLapTime] = useState(0);
+  const [bestTime, setBestTime] = useState<number | null>(null);
+
+  // Track definition - simple oval for now
+  const track: RaceTrack = {
+    segments: [
+      // Outer track boundaries
+      { x1: 100, y1: 100, x2: 700, y2: 100 }, // top
+      { x1: 700, y1: 100, x2: 700, y2: 500 }, // right
+      { x1: 700, y1: 500, x2: 100, y2: 500 }, // bottom
+      { x1: 100, y1: 500, x2: 100, y2: 100 }, // left
+      // Inner track boundaries
+      { x1: 200, y1: 200, x2: 600, y2: 200 }, // inner top
+      { x1: 600, y1: 200, x2: 600, y2: 400 }, // inner right
+      { x1: 600, y1: 400, x2: 200, y2: 400 }, // inner bottom
+      { x1: 200, y1: 400, x2: 200, y2: 200 }, // inner left
+    ]
+  };
 
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      setKeys(prev => new Set(prev).add(e.key));
+      setKeys(prev => new Set(prev).add(e.key.toLowerCase()));
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
       setKeys(prev => {
         const newKeys = new Set(prev);
-        newKeys.delete(e.key);
+        newKeys.delete(e.key.toLowerCase());
         return newKeys;
       });
     };
@@ -51,291 +67,299 @@ const Index = () => {
     };
   }, []);
 
-  // Player movement
+  // Car physics and movement
   useEffect(() => {
-    if (gameState !== 'playing') return;
-    
-    const movePlayer = () => {
-      setPlayerPos(prev => {
-        let newX = prev.x;
-        let newY = prev.y;
+    if (gameState !== 'racing') return;
+
+    const updateCar = () => {
+      setCar(prevCar => {
+        let newSpeed = prevCar.speed;
+        let newAngle = prevCar.angle;
         
-        if (keys.has('ArrowLeft') || keys.has('a')) newX = Math.max(0, newX - 2);
-        if (keys.has('ArrowRight') || keys.has('d')) newX = Math.min(100, newX + 2);
-        if (keys.has('ArrowUp') || keys.has('w')) newY = Math.max(0, newY - 2);
-        if (keys.has('ArrowDown') || keys.has('s')) newY = Math.min(100, newY + 2);
-        
-        return { x: newX, y: newY };
+        // Acceleration/Deceleration
+        if (keys.has('w') || keys.has('arrowup')) {
+          newSpeed = Math.min(newSpeed + 0.5, 8);
+        } else if (keys.has('s') || keys.has('arrowdown')) {
+          newSpeed = Math.max(newSpeed - 0.5, -4);
+        } else {
+          // Natural deceleration
+          newSpeed *= 0.95;
+          if (Math.abs(newSpeed) < 0.1) newSpeed = 0;
+        }
+
+        // Steering (only when moving)
+        if (Math.abs(newSpeed) > 0.1) {
+          if (keys.has('a') || keys.has('arrowleft')) {
+            newAngle -= 0.08 * Math.abs(newSpeed) / 8;
+          }
+          if (keys.has('d') || keys.has('arrowright')) {
+            newAngle += 0.08 * Math.abs(newSpeed) / 8;
+          }
+        }
+
+        // Braking
+        if (keys.has(' ')) {
+          newSpeed *= 0.85;
+        }
+
+        // Calculate velocity based on angle and speed
+        const newVelocity = {
+          x: Math.cos(newAngle) * newSpeed,
+          y: Math.sin(newAngle) * newSpeed
+        };
+
+        // Update position
+        let newX = prevCar.x + newVelocity.x;
+        let newY = prevCar.y + newVelocity.y;
+
+        // Simple collision detection with canvas bounds
+        if (newX < 50) newX = 50;
+        if (newX > 750) newX = 750;
+        if (newY < 50) newY = 50;
+        if (newY > 550) newY = 550;
+
+        return {
+          x: newX,
+          y: newY,
+          angle: newAngle,
+          speed: newSpeed,
+          velocity: newVelocity
+        };
       });
     };
-    
-    const interval = setInterval(movePlayer, 16);
+
+    const interval = setInterval(updateCar, 16); // ~60fps
     return () => clearInterval(interval);
   }, [keys, gameState]);
 
-  // Enemy spawning and movement
+  // Canvas rendering
   useEffect(() => {
-    if (gameState !== 'playing') return;
-    
-    const spawnEnemy = () => {
-      const newEnemy: Enemy = {
-        id: Date.now(),
-        x: Math.random() * 100,
-        y: -5,
-        dx: (Math.random() - 0.5) * 1,
-        dy: 0.5 + Math.random() * 0.5
-      };
-      setEnemies(prev => [...prev, newEnemy]);
-    };
-    
-    const spawnInterval = setInterval(spawnEnemy, 2000 / gameSpeed);
-    
-    const moveEnemies = () => {
-      setEnemies(prev => prev
-        .map(enemy => ({
-          ...enemy,
-          x: enemy.x + enemy.dx * gameSpeed,
-          y: enemy.y + enemy.dy * gameSpeed
-        }))
-        .filter(enemy => enemy.y < 110)
-      );
-    };
-    
-    const moveInterval = setInterval(moveEnemies, 16);
-    
-    return () => {
-      clearInterval(spawnInterval);
-      clearInterval(moveInterval);
-    };
-  }, [gameState, gameSpeed]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-  // Collision detection
-  useEffect(() => {
-    if (gameState !== 'playing') return;
-    
-    const checkCollisions = () => {
-      enemies.forEach(enemy => {
-        const distance = Math.sqrt(
-          Math.pow(enemy.x - playerPos.x, 2) + Math.pow(enemy.y - playerPos.y, 2)
-        );
-        
-        if (distance < 5) {
-          setExplosion({ x: playerPos.x, y: playerPos.y });
-          setGameState('gameover');
-          setTimeout(() => setExplosion(null), 1000);
-        }
-      });
-    };
-    
-    const interval = setInterval(checkCollisions, 16);
-    return () => clearInterval(interval);
-  }, [enemies, playerPos, gameState]);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-  // Score update
+    const render = () => {
+      // Clear canvas
+      ctx.fillStyle = '#2a5a2a'; // Grass green
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw track
+      ctx.fillStyle = '#333333'; // Asphalt
+      ctx.fillRect(100, 100, 600, 400);
+
+      // Draw track inner hole
+      ctx.fillStyle = '#2a5a2a';
+      ctx.fillRect(200, 200, 400, 200);
+
+      // Draw track markings
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 10]);
+      
+      // Center line
+      ctx.beginPath();
+      ctx.rect(150, 150, 500, 300);
+      ctx.stroke();
+
+      // Draw start/finish line
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(100, 300);
+      ctx.lineTo(200, 300);
+      ctx.stroke();
+
+      // Draw car
+      ctx.save();
+      ctx.translate(car.x, car.y);
+      ctx.rotate(car.angle);
+
+      // Car body
+      ctx.fillStyle = '#ff4444';
+      ctx.fillRect(-20, -10, 40, 20);
+
+      // Car details
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(-18, -8, 36, 4); // Top stripe
+      ctx.fillRect(-18, 4, 36, 4);  // Bottom stripe
+
+      // Windshield
+      ctx.fillStyle = '#87ceeb';
+      ctx.fillRect(15, -6, 4, 12);
+
+      // Wheels
+      ctx.fillStyle = '#222222';
+      const wheelRotation = (car.speed * 0.5) % (Math.PI * 2);
+      
+      // Front wheels
+      ctx.save();
+      ctx.translate(12, -12);
+      ctx.rotate(wheelRotation);
+      ctx.fillRect(-3, -2, 6, 4);
+      ctx.strokeStyle = '#666666';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-3, -2, 6, 4);
+      ctx.restore();
+
+      ctx.save();
+      ctx.translate(12, 12);
+      ctx.rotate(wheelRotation);
+      ctx.fillRect(-3, -2, 6, 4);
+      ctx.strokeStyle = '#666666';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-3, -2, 6, 4);
+      ctx.restore();
+
+      // Rear wheels
+      ctx.save();
+      ctx.translate(-12, -12);
+      ctx.rotate(wheelRotation);
+      ctx.fillRect(-3, -2, 6, 4);
+      ctx.strokeStyle = '#666666';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-3, -2, 6, 4);
+      ctx.restore();
+
+      ctx.save();
+      ctx.translate(-12, 12);
+      ctx.rotate(wheelRotation);
+      ctx.fillRect(-3, -2, 6, 4);
+      ctx.strokeStyle = '#666666';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-3, -2, 6, 4);
+      ctx.restore();
+
+      // Car outline
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-20, -10, 40, 20);
+
+      ctx.restore();
+
+      // Draw speed indicator
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '20px monospace';
+      ctx.fillText(`Скорость: ${Math.abs(car.speed * 20).toFixed(0)} км/ч`, 20, 40);
+      
+      if (gameState === 'racing') {
+        ctx.fillText(`Время: ${(lapTime / 1000).toFixed(1)}с`, 20, 70);
+      }
+
+      if (bestTime !== null) {
+        ctx.fillText(`Лучшее: ${(bestTime / 1000).toFixed(1)}с`, 20, 100);
+      }
+    };
+
+    render();
+  }, [car, gameState, lapTime, bestTime]);
+
+  // Lap timer
   useEffect(() => {
-    if (gameState !== 'playing') return;
-    
+    if (gameState !== 'racing') return;
+
     const interval = setInterval(() => {
-      setScore(prev => prev + 1);
+      setLapTime(prev => prev + 100);
     }, 100);
-    
+
     return () => clearInterval(interval);
   }, [gameState]);
 
-  const startGame = () => {
-    setGameState('playing');
-    setPlayerPos({ x: 50, y: 80 });
-    setEnemies([]);
-    setScore(0);
-    setExplosion(null);
+  const startRace = () => {
+    setGameState('racing');
+    setCar({
+      x: 150,
+      y: 300,
+      angle: 0,
+      speed: 0,
+      velocity: { x: 0, y: 0 }
+    });
+    setLapTime(0);
   };
 
-  const resetGame = () => {
+  const pauseRace = () => {
+    setGameState('paused');
+  };
+
+  const resumeRace = () => {
+    setGameState('racing');
+  };
+
+  const resetRace = () => {
     setGameState('menu');
-    setEnemies([]);
-    setExplosion(null);
+    if (lapTime > 0 && (bestTime === null || lapTime < bestTime)) {
+      setBestTime(lapTime);
+    }
   };
 
   return (
     <div className="min-h-screen bg-black text-white font-mono game-bg">
-      
-      {/* Game Canvas */}
-      <div className="relative w-full h-screen overflow-hidden">
+      <div className="relative">
         
-        {/* Stars Background */}
-        <div className="absolute inset-0">
-          {Array.from({ length: 50 }).map((_, i) => (
-            <div
-              key={i}
-              className="absolute w-1 h-1 bg-white opacity-70 animate-pulse"
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: `${Math.random() * 100}%`,
-                animationDelay: `${Math.random() * 3}s`
-              }}
-            />
-          ))}
-        </div>
+        {/* Game Canvas */}
+        <canvas
+          ref={canvasRef}
+          width={800}
+          height={600}
+          className="border-4 border-yellow-500 pixel-border"
+          style={{ imageRendering: 'pixelated' }}
+        />
 
-        {/* Game Area */}
-        {gameState === 'playing' && (
-          <>
-            {/* Player Aircraft */}
-            <div
-              className="absolute w-8 h-8 transition-all duration-75 z-10"
-              style={{
-                left: `${playerPos.x}%`,
-                top: `${playerPos.y}%`,
-                transform: 'translate(-50%, -50%)'
-              }}
-            >
-              <div className="w-full h-full bg-blue-500 relative pixel-plane">
-                <div className="absolute top-0 left-1/2 w-2 h-6 bg-blue-400 transform -translate-x-1/2"></div>
-                <div className="absolute top-2 left-0 w-8 h-2 bg-blue-600"></div>
-                <div className="absolute bottom-1 left-1 w-6 h-1 bg-red-500"></div>
-              </div>
-            </div>
-
-            {/* Enemy Aircraft */}
-            {enemies.map(enemy => (
-              <div
-                key={enemy.id}
-                className="absolute w-6 h-6 z-5"
-                style={{
-                  left: `${enemy.x}%`,
-                  top: `${enemy.y}%`,
-                  transform: 'translate(-50%, -50%)'
-                }}
-              >
-                <div className="w-full h-full bg-red-500 relative pixel-enemy">
-                  <div className="absolute top-0 left-1/2 w-1 h-4 bg-red-400 transform -translate-x-1/2"></div>
-                  <div className="absolute top-1 left-0 w-6 h-2 bg-red-600"></div>
-                  <div className="absolute bottom-0 left-1 w-4 h-1 bg-yellow-500"></div>
-                </div>
-              </div>
-            ))}
-
-            {/* Explosion Effect */}
-            {explosion && (
-              <div
-                className="absolute w-16 h-16 z-20 animate-ping"
-                style={{
-                  left: `${explosion.x}%`,
-                  top: `${explosion.y}%`,
-                  transform: 'translate(-50%, -50%)'
-                }}
-              >
-                <div className="w-full h-full bg-red-500 rounded-full opacity-80"></div>
-                <div className="absolute top-2 left-2 w-12 h-12 bg-yellow-500 rounded-full opacity-60"></div>
-                <div className="absolute top-4 left-4 w-8 h-8 bg-white rounded-full opacity-40"></div>
-              </div>
-            )}
-
-            {/* HUD */}
-            <div className="absolute top-4 left-4 z-30">
-              <div className="bg-black bg-opacity-80 p-4 border-2 border-red-500 pixel-border">
-                <div className="text-xl text-red-400 mb-2">СЧЁТ: {score}</div>
-                <div className="text-sm text-blue-400">СКОРОСТЬ: {gameSpeed.toFixed(1)}x</div>
-                <div className="text-xs text-gray-400 mt-2">WASD / Стрелки</div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Menu Screen */}
+        {/* Menu Overlay */}
         {gameState === 'menu' && (
-          <div className="absolute inset-0 flex items-center justify-center z-40">
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
             <Card className="bg-black border-4 border-red-500 p-8 text-center pixel-border">
               <h1 className="text-6xl font-bold text-red-500 mb-4 pixel-title">
-                АВИА СИМУЛЯТОР
+                ПИКСЕЛЬ ГОНКИ
               </h1>
-              <p className="text-xl text-blue-400 mb-8">Уклоняйся от врагов!</p>
+              <p className="text-xl text-yellow-400 mb-8">Гони по трассе с максимальной скоростью!</p>
               
-              <div className="space-y-4">
+              <div className="space-y-4 mb-6">
                 <Button 
-                  onClick={startGame}
-                  className="w-full bg-red-600 hover:bg-red-700 border-2 border-red-400 text-white text-xl py-3 pixel-btn"
+                  onClick={startRace}
+                  className="w-full bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white text-xl py-3 pixel-btn"
                 >
-                  НАЧАТЬ ИГРУ
-                </Button>
-                
-                <Button 
-                  onClick={() => setGameState('settings')}
-                  className="w-full bg-blue-600 hover:bg-blue-700 border-2 border-blue-400 text-white text-lg py-2 pixel-btn"
-                >
-                  НАСТРОЙКИ
+                  СТАРТ ГОНКИ
                 </Button>
               </div>
               
-              <div className="mt-8 text-xs text-gray-500">
-                Управление: WASD или стрелки
+              <div className="text-sm text-gray-400 space-y-1">
+                <div>WASD / Стрелки - управление</div>
+                <div>Пробел - тормоз</div>
+                <div>W/↑ - газ, S/↓ - назад</div>
+                <div>A/← - влево, D/→ - вправо</div>
               </div>
+              
+              {bestTime && (
+                <div className="mt-4 text-lg text-blue-400">
+                  Лучшее время: {(bestTime / 1000).toFixed(1)}с
+                </div>
+              )}
             </Card>
           </div>
         )}
 
-        {/* Settings Screen */}
-        {gameState === 'settings' && (
-          <div className="absolute inset-0 flex items-center justify-center z-40">
-            <Card className="bg-black border-4 border-blue-500 p-8 pixel-border max-w-md">
-              <h2 className="text-4xl font-bold text-blue-400 mb-6 text-center pixel-title">
-                НАСТРОЙКИ
+        {/* Pause Overlay */}
+        {gameState === 'paused' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
+            <Card className="bg-black border-4 border-yellow-500 p-8 text-center pixel-border">
+              <h2 className="text-4xl font-bold text-yellow-400 mb-6 pixel-title">
+                ПАУЗА
               </h2>
-              
-              <div className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-yellow-400 text-lg">Скорость игры:</label>
-                  <Slider
-                    value={[gameSpeed]}
-                    onValueChange={([value]) => setGameSpeed(value)}
-                    min={0.5}
-                    max={3}
-                    step={0.1}
-                    className="w-full"
-                  />
-                  <div className="text-right text-sm text-gray-400">{gameSpeed.toFixed(1)}x</div>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <label className="text-yellow-400 text-lg">Звук:</label>
-                  <Switch
-                    checked={soundEnabled}
-                    onCheckedChange={setSoundEnabled}
-                  />
-                </div>
-              </div>
-              
-              <Button 
-                onClick={() => setGameState('menu')}
-                className="w-full mt-8 bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white text-lg py-2 pixel-btn"
-              >
-                НАЗАД
-              </Button>
-            </Card>
-          </div>
-        )}
-
-        {/* Game Over Screen */}
-        {gameState === 'gameover' && (
-          <div className="absolute inset-0 flex items-center justify-center z-40">
-            <Card className="bg-black border-4 border-red-600 p-8 text-center pixel-border">
-              <h2 className="text-5xl font-bold text-red-500 mb-4 pixel-title animate-pulse">
-                ВЗРЫВ!
-              </h2>
-              <p className="text-2xl text-yellow-400 mb-2">Финальный счёт:</p>
-              <p className="text-4xl text-blue-400 mb-8 font-bold">{score}</p>
               
               <div className="space-y-4">
                 <Button 
-                  onClick={startGame}
-                  className="w-full bg-red-600 hover:bg-red-700 border-2 border-red-400 text-white text-xl py-3 pixel-btn"
+                  onClick={resumeRace}
+                  className="w-full bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white text-lg py-2 pixel-btn"
                 >
-                  ИГРАТЬ СНОВА
+                  ПРОДОЛЖИТЬ
                 </Button>
                 
                 <Button 
-                  onClick={resetGame}
-                  className="w-full bg-gray-600 hover:bg-gray-700 border-2 border-gray-400 text-white text-lg py-2 pixel-btn"
+                  onClick={resetRace}
+                  className="w-full bg-red-600 hover:bg-red-700 border-2 border-red-400 text-white text-lg py-2 pixel-btn"
                 >
                   В МЕНЮ
                 </Button>
@@ -343,9 +367,38 @@ const Index = () => {
             </Card>
           </div>
         )}
+
+        {/* In-game controls */}
+        {gameState === 'racing' && (
+          <div className="absolute top-4 right-4">
+            <Button 
+              onClick={pauseRace}
+              className="bg-yellow-600 hover:bg-yellow-700 border-2 border-yellow-400 text-white pixel-btn"
+            >
+              ПАУЗА
+            </Button>
+          </div>
+        )}
+
+        {/* Track map mini-view */}
+        {gameState === 'racing' && (
+          <div className="absolute bottom-4 right-4 w-32 h-24 bg-black bg-opacity-80 border-2 border-white">
+            <div className="relative w-full h-full">
+              {/* Mini track */}
+              <div className="absolute inset-1 bg-gray-600"></div>
+              <div className="absolute top-2 left-2 right-2 bottom-2 bg-green-800"></div>
+              <div className="absolute" style={{
+                left: `${(car.x / 800) * 100}%`,
+                top: `${(car.y / 600) * 100}%`,
+                width: '4px',
+                height: '4px',
+                backgroundColor: '#ff4444',
+                transform: 'translate(-50%, -50%)'
+              }}></div>
+            </div>
+          </div>
+        )}
       </div>
-
-
     </div>
   );
 };

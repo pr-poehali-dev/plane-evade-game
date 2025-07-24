@@ -97,5 +97,84 @@
 
   body {
     @apply bg-background text-foreground;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+}
+
+/* Pixel Art Styles */
+@layer components {
+  .pixel-border {
+    border-image: repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 2px,
+        currentColor 2px,
+        currentColor 4px
+      )
+      2;
+    image-rendering: pixelated;
+  }
+
+  .pixel-btn {
+    image-rendering: pixelated;
+    font-family: "Courier New", monospace;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    box-shadow:
+      inset 2px 2px 0px rgba(255, 255, 255, 0.3),
+      inset -2px -2px 0px rgba(0, 0, 0, 0.3);
+  }
+
+  .pixel-btn:hover {
+    box-shadow:
+      inset 1px 1px 0px rgba(255, 255, 255, 0.5),
+      inset -1px -1px 0px rgba(0, 0, 0, 0.5);
+  }
+
+  .pixel-title {
+    font-family: "Courier New", monospace;
+    font-weight: bold;
+    text-rendering: optimizeSpeed;
+    image-rendering: pixelated;
+  }
+
+  .pixel-plane,
+  .pixel-enemy {
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+
+  /* Game-specific pixel effects */
+  .game-bg {
+    background:
+      radial-gradient(2px 2px at 20px 30px, #fff, transparent),
+      radial-gradient(
+        2px 2px at 40px 70px,
+        rgba(255, 255, 255, 0.5),
+        transparent
+      ),
+      radial-gradient(1px 1px at 90px 40px, #fff, transparent),
+      radial-gradient(
+        1px 1px at 130px 80px,
+        rgba(255, 255, 255, 0.7),
+        transparent
+      ),
+      linear-gradient(180deg, #000 0%, #111 50%, #222 100%);
+    background-repeat: repeat;
+    background-size: 200px 200px;
+    animation: starfield 20s linear infinite;
+  }
+
+  @keyframes starfield {
+    0% {
+      background-position: 0 0;
+    }
+    100% {
+      background-position: 0 200px;
+    }
   }
 }

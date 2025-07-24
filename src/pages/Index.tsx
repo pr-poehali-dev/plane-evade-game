@@ -1,48 +1,104 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
-interface CarPosition {
+interface Player {
   x: number;
   y: number;
-  angle: number;
-  speed: number;
-  velocity: { x: number; y: number };
+  vx: number;
+  vy: number;
+  onGround: boolean;
+  facingRight: boolean;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
+  level: number;
+  experience: number;
+  experienceToNext: number;
+  attacking: boolean;
+  casting: boolean;
+  animationFrame: number;
+  animationTimer: number;
 }
 
-interface RaceTrack {
-  segments: { x1: number; y1: number; x2: number; y2: number }[];
+interface Enemy {
+  id: number;
+  x: number;
+  y: number;
+  health: number;
+  maxHealth: number;
+  type: 'skeleton' | 'shadow';
+  facingRight: boolean;
+  ai: number;
+}
+
+interface Platform {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  type: 'stone' | 'wood' | 'metal';
+}
+
+interface Particle {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  size: number;
 }
 
 const Index = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gameState, setGameState] = useState<'menu' | 'racing' | 'paused'>('menu');
-  const [car, setCar] = useState<CarPosition>({
-    x: 400,
-    y: 500,
-    angle: 0,
-    speed: 0,
-    velocity: { x: 0, y: 0 }
-  });
+  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'inventory'>('menu');
+  const [camera, setCamera] = useState({ x: 0, y: 0 });
   const [keys, setKeys] = useState<Set<string>>(new Set());
-  const [lapTime, setLapTime] = useState(0);
-  const [bestTime, setBestTime] = useState<number | null>(null);
+  
+  const [player, setPlayer] = useState<Player>({
+    x: 100,
+    y: 300,
+    vx: 0,
+    vy: 0,
+    onGround: false,
+    facingRight: true,
+    health: 100,
+    maxHealth: 100,
+    mana: 50,
+    maxMana: 50,
+    level: 1,
+    experience: 0,
+    experienceToNext: 100,
+    attacking: false,
+    casting: false,
+    animationFrame: 0,
+    animationTimer: 0
+  });
 
-  // Track definition - simple oval for now
-  const track: RaceTrack = {
-    segments: [
-      // Outer track boundaries
-      { x1: 100, y1: 100, x2: 700, y2: 100 }, // top
-      { x1: 700, y1: 100, x2: 700, y2: 500 }, // right
-      { x1: 700, y1: 500, x2: 100, y2: 500 }, // bottom
-      { x1: 100, y1: 500, x2: 100, y2: 100 }, // left
-      // Inner track boundaries
-      { x1: 200, y1: 200, x2: 600, y2: 200 }, // inner top
-      { x1: 600, y1: 200, x2: 600, y2: 400 }, // inner right
-      { x1: 600, y1: 400, x2: 200, y2: 400 }, // inner bottom
-      { x1: 200, y1: 400, x2: 200, y2: 200 }, // inner left
-    ]
-  };
+  const [enemies, setEnemies] = useState<Enemy[]>([
+    { id: 1, x: 400, y: 300, health: 30, maxHealth: 30, type: 'skeleton', facingRight: false, ai: 0 },
+    { id: 2, x: 700, y: 200, health: 50, maxHealth: 50, type: 'shadow', facingRight: false, ai: 0 }
+  ]);
+
+  const [particles, setParticles] = useState<Particle[]>([]);
+
+  const platforms: Platform[] = [
+    // Ground platforms
+    { x: 0, y: 350, width: 200, height: 50, type: 'stone' },
+    { x: 300, y: 350, width: 200, height: 50, type: 'stone' },
+    { x: 600, y: 350, width: 200, height: 50, type: 'stone' },
+    // Elevated platforms
+    { x: 250, y: 250, width: 100, height: 20, type: 'wood' },
+    { x: 450, y: 200, width: 100, height: 20, type: 'wood' },
+    { x: 650, y: 150, width: 100, height: 20, type: 'metal' },
+    // Walls
+    { x: 0, y: 0, width: 20, height: 400, type: 'stone' },
+    { x: 780, y: 0, width: 20, height: 400, type: 'stone' }
+  ];
 
   // Keyboard controls
   useEffect(() => {
@@ -67,70 +123,165 @@ const Index = () => {
     };
   }, []);
 
-  // Car physics and movement
+  // Add particles
+  const addParticle = useCallback((x: number, y: number, color: string, count: number = 5) => {
+    const newParticles: Particle[] = [];
+    for (let i = 0; i < count; i++) {
+      newParticles.push({
+        id: Date.now() + i,
+        x: x + (Math.random() - 0.5) * 20,
+        y: y + (Math.random() - 0.5) * 20,
+        vx: (Math.random() - 0.5) * 6,
+        vy: (Math.random() - 0.5) * 6,
+        life: 60,
+        maxLife: 60,
+        color,
+        size: Math.random() * 4 + 2
+      });
+    }
+    setParticles(prev => [...prev, ...newParticles]);
+  }, []);
+
+  // Collision detection
+  const checkCollision = (x: number, y: number, width: number, height: number) => {
+    return platforms.find(platform => 
+      x < platform.x + platform.width &&
+      x + width > platform.x &&
+      y < platform.y + platform.height &&
+      y + height > platform.y
+    );
+  };
+
+  // Player physics and controls
   useEffect(() => {
-    if (gameState !== 'racing') return;
+    if (gameState !== 'playing') return;
 
-    const updateCar = () => {
-      setCar(prevCar => {
-        let newSpeed = prevCar.speed;
-        let newAngle = prevCar.angle;
+    const updatePlayer = () => {
+      setPlayer(prev => {
+        let newPlayer = { ...prev };
         
-        // Acceleration/Deceleration
-        if (keys.has('w') || keys.has('arrowup')) {
-          newSpeed = Math.min(newSpeed + 0.5, 8);
-        } else if (keys.has('s') || keys.has('arrowdown')) {
-          newSpeed = Math.max(newSpeed - 0.5, -4);
+        // Animation timer
+        newPlayer.animationTimer++;
+        if (newPlayer.animationTimer > 8) {
+          newPlayer.animationTimer = 0;
+          newPlayer.animationFrame = (newPlayer.animationFrame + 1) % 4;
+        }
+
+        // Horizontal movement
+        if (keys.has('a') || keys.has('arrowleft')) {
+          newPlayer.vx = Math.max(newPlayer.vx - 0.8, -6);
+          newPlayer.facingRight = false;
+        } else if (keys.has('d') || keys.has('arrowright')) {
+          newPlayer.vx = Math.min(newPlayer.vx + 0.8, 6);
+          newPlayer.facingRight = true;
         } else {
-          // Natural deceleration
-          newSpeed *= 0.95;
-          if (Math.abs(newSpeed) < 0.1) newSpeed = 0;
+          newPlayer.vx *= 0.8; // Friction
         }
 
-        // Steering (only when moving)
-        if (Math.abs(newSpeed) > 0.1) {
-          if (keys.has('a') || keys.has('arrowleft')) {
-            newAngle -= 0.08 * Math.abs(newSpeed) / 8;
+        // Jumping
+        if ((keys.has('w') || keys.has(' ')) && newPlayer.onGround) {
+          newPlayer.vy = -15;
+          newPlayer.onGround = false;
+        }
+
+        // Attacking
+        if (keys.has('j') && !newPlayer.attacking && !newPlayer.casting) {
+          newPlayer.attacking = true;
+          setTimeout(() => {
+            setPlayer(p => ({ ...p, attacking: false }));
+          }, 300);
+        }
+
+        // Magic casting
+        if (keys.has('k') && !newPlayer.casting && !newPlayer.attacking && newPlayer.mana >= 10) {
+          newPlayer.casting = true;
+          newPlayer.mana -= 10;
+          addParticle(newPlayer.x + (newPlayer.facingRight ? 40 : -40), newPlayer.y + 10, '#4f46e5', 8);
+          setTimeout(() => {
+            setPlayer(p => ({ ...p, casting: false }));
+          }, 500);
+        }
+
+        // Gravity
+        newPlayer.vy += 0.8;
+        
+        // Apply velocity
+        newPlayer.x += newPlayer.vx;
+        newPlayer.y += newPlayer.vy;
+
+        // Ground collision
+        newPlayer.onGround = false;
+        const collision = checkCollision(newPlayer.x - 16, newPlayer.y - 16, 32, 32);
+        
+        if (collision) {
+          if (newPlayer.vy > 0 && newPlayer.y - 16 < collision.y) {
+            newPlayer.y = collision.y - 16;
+            newPlayer.vy = 0;
+            newPlayer.onGround = true;
+          } else if (newPlayer.vy < 0 && newPlayer.y + 16 > collision.y + collision.height) {
+            newPlayer.y = collision.y + collision.height + 16;
+            newPlayer.vy = 0;
+          } else if (newPlayer.vx > 0) {
+            newPlayer.x = collision.x - 16;
+            newPlayer.vx = 0;
+          } else if (newPlayer.vx < 0) {
+            newPlayer.x = collision.x + collision.width + 16;
+            newPlayer.vx = 0;
           }
-          if (keys.has('d') || keys.has('arrowright')) {
-            newAngle += 0.08 * Math.abs(newSpeed) / 8;
-          }
         }
 
-        // Braking
-        if (keys.has(' ')) {
-          newSpeed *= 0.85;
+        // Mana regeneration
+        if (newPlayer.mana < newPlayer.maxMana) {
+          newPlayer.mana = Math.min(newPlayer.mana + 0.1, newPlayer.maxMana);
         }
 
-        // Calculate velocity based on angle and speed
-        const newVelocity = {
-          x: Math.cos(newAngle) * newSpeed,
-          y: Math.sin(newAngle) * newSpeed
-        };
+        // Bounds checking
+        if (newPlayer.x < 20) newPlayer.x = 20;
+        if (newPlayer.x > 780) newPlayer.x = 780;
+        if (newPlayer.y > 600) {
+          newPlayer.health -= 10;
+          newPlayer.x = 100;
+          newPlayer.y = 300;
+          addParticle(newPlayer.x, newPlayer.y, '#dc2626', 10);
+        }
 
-        // Update position
-        let newX = prevCar.x + newVelocity.x;
-        let newY = prevCar.y + newVelocity.y;
-
-        // Simple collision detection with canvas bounds
-        if (newX < 50) newX = 50;
-        if (newX > 750) newX = 750;
-        if (newY < 50) newY = 50;
-        if (newY > 550) newY = 550;
-
-        return {
-          x: newX,
-          y: newY,
-          angle: newAngle,
-          speed: newSpeed,
-          velocity: newVelocity
-        };
+        return newPlayer;
       });
     };
 
-    const interval = setInterval(updateCar, 16); // ~60fps
+    const interval = setInterval(updatePlayer, 16);
     return () => clearInterval(interval);
-  }, [keys, gameState]);
+  }, [keys, gameState, addParticle]);
+
+  // Update particles
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const updateParticles = () => {
+      setParticles(prev => prev
+        .map(particle => ({
+          ...particle,
+          x: particle.x + particle.vx,
+          y: particle.y + particle.vy,
+          vx: particle.vx * 0.98,
+          vy: particle.vy * 0.98,
+          life: particle.life - 1
+        }))
+        .filter(particle => particle.life > 0)
+      );
+    };
+
+    const interval = setInterval(updateParticles, 16);
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  // Camera follow player
+  useEffect(() => {
+    setCamera({
+      x: Math.max(0, Math.min(player.x - 400, 400)),
+      y: Math.max(0, Math.min(player.y - 300, 200))
+    });
+  }, [player.x, player.y]);
 
   // Canvas rendering
   useEffect(() => {
@@ -141,161 +292,197 @@ const Index = () => {
     if (!ctx) return;
 
     const render = () => {
-      // Clear canvas
-      ctx.fillStyle = '#2a5a2a'; // Grass green
+      // Clear with dark gradient background
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, '#1a1a2e');
+      gradient.addColorStop(1, '#16213e');
+      ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw track
-      ctx.fillStyle = '#333333'; // Asphalt
-      ctx.fillRect(100, 100, 600, 400);
+      ctx.save();
+      ctx.translate(-camera.x, -camera.y);
 
-      // Draw track inner hole
-      ctx.fillStyle = '#2a5a2a';
-      ctx.fillRect(200, 200, 400, 200);
+      // Draw platforms
+      platforms.forEach(platform => {
+        let color = '#4a5568';
+        if (platform.type === 'wood') color = '#8b4513';
+        if (platform.type === 'metal') color = '#718096';
+        
+        ctx.fillStyle = color;
+        ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+        
+        // Platform details
+        ctx.fillStyle = '#2d3748';
+        ctx.fillRect(platform.x, platform.y, platform.width, 4);
+      });
 
-      // Draw track markings
-      ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([10, 10]);
+      // Draw enemies
+      enemies.forEach(enemy => {
+        ctx.save();
+        ctx.translate(enemy.x, enemy.y);
+        
+        if (enemy.type === 'skeleton') {
+          // Skeleton body
+          ctx.fillStyle = '#f7fafc';
+          ctx.fillRect(-8, -20, 16, 20);
+          
+          // Skeleton head
+          ctx.fillStyle = '#e2e8f0';
+          ctx.fillRect(-6, -28, 12, 8);
+          
+          // Eyes
+          ctx.fillStyle = '#dc2626';
+          ctx.fillRect(-4, -26, 2, 2);
+          ctx.fillRect(2, -26, 2, 2);
+        } else {
+          // Shadow enemy
+          ctx.fillStyle = 'rgba(79, 70, 229, 0.8)';
+          ctx.fillRect(-10, -24, 20, 24);
+          
+          // Shadow aura
+          ctx.fillStyle = 'rgba(79, 70, 229, 0.3)';
+          ctx.fillRect(-12, -26, 24, 26);
+        }
+        
+        // Health bar
+        if (enemy.health < enemy.maxHealth) {
+          ctx.fillStyle = '#dc2626';
+          ctx.fillRect(-12, -35, 24, 4);
+          ctx.fillStyle = '#16a34a';
+          ctx.fillRect(-12, -35, (enemy.health / enemy.maxHealth) * 24, 4);
+        }
+        
+        ctx.restore();
+      });
+
+      // Draw particles
+      particles.forEach(particle => {
+        const alpha = particle.life / particle.maxLife;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = particle.color;
+        ctx.fillRect(particle.x - particle.size/2, particle.y - particle.size/2, particle.size, particle.size);
+        ctx.restore();
+      });
+
+      // Draw player
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      if (!player.facingRight) ctx.scale(-1, 1);
+
+      // Player body
+      if (player.attacking) {
+        ctx.fillStyle = '#fbbf24'; // Golden when attacking
+      } else if (player.casting) {
+        ctx.fillStyle = '#8b5cf6'; // Purple when casting
+      } else {
+        ctx.fillStyle = '#eea47f'; // Normal skin tone
+      }
       
-      // Center line
-      ctx.beginPath();
-      ctx.rect(150, 150, 500, 300);
-      ctx.stroke();
+      ctx.fillRect(-8, -20, 16, 20);
 
-      // Draw start/finish line
-      ctx.setLineDash([]);
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(100, 300);
-      ctx.lineTo(200, 300);
-      ctx.stroke();
-
-      // Draw car
-      ctx.save();
-      ctx.translate(car.x, car.y);
-      ctx.rotate(car.angle);
-
-      // Car body
-      ctx.fillStyle = '#ff4444';
-      ctx.fillRect(-20, -10, 40, 20);
-
-      // Car details
-      ctx.fillStyle = '#cc0000';
-      ctx.fillRect(-18, -8, 36, 4); // Top stripe
-      ctx.fillRect(-18, 4, 36, 4);  // Bottom stripe
-
-      // Windshield
-      ctx.fillStyle = '#87ceeb';
-      ctx.fillRect(15, -6, 4, 12);
-
-      // Wheels
-      ctx.fillStyle = '#222222';
-      const wheelRotation = (car.speed * 0.5) % (Math.PI * 2);
+      // Player armor
+      ctx.fillStyle = '#374151';
+      ctx.fillRect(-10, -18, 20, 16);
       
-      // Front wheels
-      ctx.save();
-      ctx.translate(12, -12);
-      ctx.rotate(wheelRotation);
-      ctx.fillRect(-3, -2, 6, 4);
-      ctx.strokeStyle = '#666666';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-3, -2, 6, 4);
-      ctx.restore();
+      // Player head
+      ctx.fillStyle = '#eea47f';
+      ctx.fillRect(-6, -28, 12, 8);
+      
+      // Helmet
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(-7, -30, 14, 6);
+      
+      // Eyes
+      ctx.fillStyle = '#3b82f6';
+      ctx.fillRect(-4, -26, 2, 2);
+      ctx.fillRect(2, -26, 2, 2);
 
-      ctx.save();
-      ctx.translate(12, 12);
-      ctx.rotate(wheelRotation);
-      ctx.fillRect(-3, -2, 6, 4);
-      ctx.strokeStyle = '#666666';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-3, -2, 6, 4);
-      ctx.restore();
-
-      // Rear wheels
-      ctx.save();
-      ctx.translate(-12, -12);
-      ctx.rotate(wheelRotation);
-      ctx.fillRect(-3, -2, 6, 4);
-      ctx.strokeStyle = '#666666';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-3, -2, 6, 4);
-      ctx.restore();
-
-      ctx.save();
-      ctx.translate(-12, 12);
-      ctx.rotate(wheelRotation);
-      ctx.fillRect(-3, -2, 6, 4);
-      ctx.strokeStyle = '#666666';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-3, -2, 6, 4);
-      ctx.restore();
-
-      // Car outline
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-20, -10, 40, 20);
+      // Weapon (sword)
+      if (player.attacking || player.casting) {
+        ctx.fillStyle = '#d1d5db';
+        ctx.fillRect(8, -25, 3, 20);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(8, -28, 3, 3);
+      }
 
       ctx.restore();
 
-      // Draw speed indicator
+      ctx.restore();
+
+      // UI Elements
+      drawUI(ctx);
+    };
+
+    const drawUI = (ctx: CanvasRenderingContext2D) => {
+      // Health bar
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(20, 20, 204, 24);
+      ctx.fillStyle = '#dc2626';
+      ctx.fillRect(22, 22, 200, 20);
+      ctx.fillStyle = '#16a34a';
+      ctx.fillRect(22, 22, (player.health / player.maxHealth) * 200, 20);
+      
       ctx.fillStyle = '#ffffff';
-      ctx.font = '20px monospace';
-      ctx.fillText(`Скорость: ${Math.abs(car.speed * 20).toFixed(0)} км/ч`, 20, 40);
-      
-      if (gameState === 'racing') {
-        ctx.fillText(`Время: ${(lapTime / 1000).toFixed(1)}с`, 20, 70);
-      }
+      ctx.font = '14px monospace';
+      ctx.fillText(`HP: ${Math.floor(player.health)}/${player.maxHealth}`, 30, 36);
 
-      if (bestTime !== null) {
-        ctx.fillText(`Лучшее: ${(bestTime / 1000).toFixed(1)}с`, 20, 100);
-      }
+      // Mana bar
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(20, 50, 204, 24);
+      ctx.fillStyle = '#1e40af';
+      ctx.fillRect(22, 52, 200, 20);
+      ctx.fillStyle = '#3b82f6';
+      ctx.fillRect(22, 52, (player.mana / player.maxMana) * 200, 20);
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`MP: ${Math.floor(player.mana)}/${player.maxMana}`, 30, 66);
+
+      // Level and XP
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(20, 80, 204, 24);
+      ctx.fillStyle = '#7c3aed';
+      ctx.fillRect(22, 82, (player.experience / player.experienceToNext) * 200, 20);
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`Level ${player.level} - XP: ${player.experience}/${player.experienceToNext}`, 30, 96);
+
+      // Controls
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(20, canvas.height - 80, 300, 60);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '12px monospace';
+      ctx.fillText('WASD/Стрелки - движение', 30, canvas.height - 60);
+      ctx.fillText('J - атака мечом', 30, canvas.height - 45);
+      ctx.fillText('K - магическая атака', 30, canvas.height - 30);
+      ctx.fillText('I - инвентарь', 30, canvas.height - 15);
     };
 
     render();
-  }, [car, gameState, lapTime, bestTime]);
+  }, [player, enemies, particles, camera, gameState]);
 
-  // Lap timer
-  useEffect(() => {
-    if (gameState !== 'racing') return;
-
-    const interval = setInterval(() => {
-      setLapTime(prev => prev + 100);
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [gameState]);
-
-  const startRace = () => {
-    setGameState('racing');
-    setCar({
-      x: 150,
-      y: 300,
-      angle: 0,
-      speed: 0,
-      velocity: { x: 0, y: 0 }
-    });
-    setLapTime(0);
+  const startGame = () => {
+    setGameState('playing');
   };
 
-  const pauseRace = () => {
+  const pauseGame = () => {
     setGameState('paused');
   };
 
-  const resumeRace = () => {
-    setGameState('racing');
+  const resumeGame = () => {
+    setGameState('playing');
   };
 
-  const resetRace = () => {
-    setGameState('menu');
-    if (lapTime > 0 && (bestTime === null || lapTime < bestTime)) {
-      setBestTime(lapTime);
-    }
+  const openInventory = () => {
+    setGameState('inventory');
+  };
+
+  const closeInventory = () => {
+    setGameState('playing');
   };
 
   return (
-    <div className="min-h-screen bg-black text-white font-mono game-bg">
+    <div className="min-h-screen bg-gray-900 text-white font-mono">
       <div className="relative">
         
         {/* Game Canvas */}
@@ -303,40 +490,39 @@ const Index = () => {
           ref={canvasRef}
           width={800}
           height={600}
-          className="border-4 border-yellow-500 pixel-border"
+          className="border-4 border-purple-600 pixel-border"
           style={{ imageRendering: 'pixelated' }}
         />
 
         {/* Menu Overlay */}
         {gameState === 'menu' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
-            <Card className="bg-black border-4 border-red-500 p-8 text-center pixel-border">
-              <h1 className="text-6xl font-bold text-red-500 mb-4 pixel-title">
-                ПИКСЕЛЬ ГОНКИ
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90">
+            <Card className="bg-gray-900 border-4 border-purple-600 p-8 text-center pixel-border max-w-md">
+              <h1 className="text-4xl font-bold text-purple-400 mb-2 pixel-title">
+                SHADOWBOUND
               </h1>
-              <p className="text-xl text-yellow-400 mb-8">Гони по трассе с максимальной скоростью!</p>
+              <h2 className="text-xl text-gray-300 mb-6">
+                Легенда о Затерянном Королевстве
+              </h2>
               
-              <div className="space-y-4 mb-6">
-                <Button 
-                  onClick={startRace}
-                  className="w-full bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white text-xl py-3 pixel-btn"
-                >
-                  СТАРТ ГОНКИ
-                </Button>
+              <div className="text-sm text-gray-400 mb-8 text-left">
+                <p className="mb-2">Мрачное королевство окутано древним проклятием...</p>
+                <p className="mb-2">Воин Каэль должен исследовать опасные земли,</p>  
+                <p>сражаться с темными силами и снять проклятие.</p>
               </div>
               
-              <div className="text-sm text-gray-400 space-y-1">
-                <div>WASD / Стрелки - управление</div>
-                <div>Пробел - тормоз</div>
-                <div>W/↑ - газ, S/↓ - назад</div>
-                <div>A/← - влево, D/→ - вправо</div>
-              </div>
+              <Button 
+                onClick={startGame}
+                className="w-full bg-purple-600 hover:bg-purple-700 border-2 border-purple-400 text-white text-xl py-3 pixel-btn mb-4"
+              >
+                НАЧАТЬ ПРИКЛЮЧЕНИЕ
+              </Button>
               
-              {bestTime && (
-                <div className="mt-4 text-lg text-blue-400">
-                  Лучшее время: {(bestTime / 1000).toFixed(1)}с
-                </div>
-              )}
+              <div className="text-xs text-gray-500 space-y-1">
+                <div>WASD/Стрелки - движение и прыжки</div>
+                <div>J - атака мечом, K - магия</div>
+                <div>I - инвентарь и характеристики</div>
+              </div>
             </Card>
           </div>
         )}
@@ -344,21 +530,28 @@ const Index = () => {
         {/* Pause Overlay */}
         {gameState === 'paused' && (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
-            <Card className="bg-black border-4 border-yellow-500 p-8 text-center pixel-border">
+            <Card className="bg-gray-900 border-4 border-yellow-500 p-8 text-center pixel-border">
               <h2 className="text-4xl font-bold text-yellow-400 mb-6 pixel-title">
                 ПАУЗА
               </h2>
               
               <div className="space-y-4">
                 <Button 
-                  onClick={resumeRace}
+                  onClick={resumeGame}
                   className="w-full bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white text-lg py-2 pixel-btn"
                 >
                   ПРОДОЛЖИТЬ
                 </Button>
                 
                 <Button 
-                  onClick={resetRace}
+                  onClick={openInventory}
+                  className="w-full bg-blue-600 hover:bg-blue-700 border-2 border-blue-400 text-white text-lg py-2 pixel-btn"
+                >
+                  ИНВЕНТАРЬ
+                </Button>
+                
+                <Button 
+                  onClick={() => setGameState('menu')}
                   className="w-full bg-red-600 hover:bg-red-700 border-2 border-red-400 text-white text-lg py-2 pixel-btn"
                 >
                   В МЕНЮ
@@ -368,34 +561,87 @@ const Index = () => {
           </div>
         )}
 
+        {/* Inventory Screen */}
+        {gameState === 'inventory' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90">
+            <Card className="bg-gray-900 border-4 border-blue-500 p-8 pixel-border max-w-lg">
+              <h2 className="text-3xl font-bold text-blue-400 mb-6 text-center pixel-title">
+                КАЭЛЬ - ВОИН ТЕНИ
+              </h2>
+              
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <h3 className="text-lg text-yellow-400 mb-3">Характеристики:</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>Уровень:</span>
+                      <span className="text-purple-400">{player.level}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Здоровье:</span>
+                      <span className="text-red-400">{player.maxHealth}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Мана:</span>
+                      <span className="text-blue-400">{player.maxMana}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Опыт:</span>
+                      <span className="text-green-400">{player.experience}/{player.experienceToNext}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div>
+                  <h3 className="text-lg text-yellow-400 mb-3">Снаряжение:</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>Оружие:</span>
+                      <span className="text-gray-300">Стальной меч</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Броня:</span>
+                      <span className="text-gray-300">Кожаная куртка</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Шлем:</span>
+                      <span className="text-gray-300">Железный шлем</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Заклинания:</span>
+                      <span className="text-purple-300">Огненный шар</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-6 text-center">
+                <Button 
+                  onClick={closeInventory}
+                  className="bg-green-600 hover:bg-green-700 border-2 border-green-400 text-white pixel-btn"
+                >
+                  ЗАКРЫТЬ
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
         {/* In-game controls */}
-        {gameState === 'racing' && (
-          <div className="absolute top-4 right-4">
+        {gameState === 'playing' && (
+          <div className="absolute top-4 right-4 space-x-2">
             <Button 
-              onClick={pauseRace}
+              onClick={pauseGame}
               className="bg-yellow-600 hover:bg-yellow-700 border-2 border-yellow-400 text-white pixel-btn"
             >
               ПАУЗА
             </Button>
-          </div>
-        )}
-
-        {/* Track map mini-view */}
-        {gameState === 'racing' && (
-          <div className="absolute bottom-4 right-4 w-32 h-24 bg-black bg-opacity-80 border-2 border-white">
-            <div className="relative w-full h-full">
-              {/* Mini track */}
-              <div className="absolute inset-1 bg-gray-600"></div>
-              <div className="absolute top-2 left-2 right-2 bottom-2 bg-green-800"></div>
-              <div className="absolute" style={{
-                left: `${(car.x / 800) * 100}%`,
-                top: `${(car.y / 600) * 100}%`,
-                width: '4px',
-                height: '4px',
-                backgroundColor: '#ff4444',
-                transform: 'translate(-50%, -50%)'
-              }}></div>
-            </div>
+            <Button 
+              onClick={openInventory}
+              className="bg-blue-600 hover:bg-blue-700 border-2 border-blue-400 text-white pixel-btn"
+            >
+              I
+            </Button>
           </div>
         )}
       </div>
